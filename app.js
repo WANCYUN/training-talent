@@ -722,13 +722,26 @@
       // V1.1.4: 所有 PDF 都走自有 PDF.js 閱讀器，不再嵌入 Google Drive 預覽器。
       // 這樣可移除 Drive 自帶的「彈出式視窗」控制項，且手機/電腦閱讀介面一致。
       host.classList.remove('pdf-drive-shell');
-      let data = state.pdfCache.get(contentId);
-      if (!data) {
-        data = await api('getPdfContent', { contentId }, state.token, { timeout: 60000 });
-        state.pdfCache.set(contentId, data);
+      let bytes = state.pdfCache.get(contentId);
+      if (!(bytes instanceof Uint8Array)) {
+        let usedDirectFetch = false;
+        try {
+          const resolved = new URL(pdfUrl, window.location.href);
+          if (resolved.origin === window.location.origin) {
+            const response = await fetch(resolved.href, { cache: 'no-store', credentials: 'same-origin' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            bytes = new Uint8Array(await response.arrayBuffer());
+            usedDirectFetch = true;
+          }
+        } catch {}
+        if (!usedDirectFetch) {
+          const data = await api('getPdfContent', { contentId }, state.token, { timeout: 60000 });
+          bytes = base64Bytes(data.base64);
+        }
+        state.pdfCache.set(contentId, bytes);
       }
       const pdfjs = await loadPdfJs();
-      const pdf = await pdfjs.getDocument({ data: base64Bytes(data.base64) }).promise;
+      const pdf = await pdfjs.getDocument({ data: bytes }).promise;
       host.innerHTML = '<div class="pdf-canvas-stack"></div>';
       const stack = host.firstElementChild;
       const available = Math.max(280, host.clientWidth - 28);
@@ -936,6 +949,114 @@
       setStudentTab(state.studentTab || 'courses', false);
     }
     saveViewState({ view: wasPreview ? 'admin' : 'student', activePackageId: '', activeLessonId: '', scrollY: 0 });
+  }
+
+  function ojtTemplate() {
+    const tpl = window.OJT_COURSE_TEMPLATE;
+    return tpl && Array.isArray(tpl.manuals) ? tpl : null;
+  }
+
+  function summaryTextForOjt(manual) {
+    const lines = Array.isArray(manual?.summary) ? manual.summary : [];
+    const meta = [manual?.revision ? `修訂版本：${manual.revision}` : '', manual?.pages ? `手冊頁數：${manual.pages} 頁` : ''].filter(Boolean).join('｜');
+    return [`本學習項目重點${meta ? `（${meta}）` : ''}`, ...lines.map((line, index) => `${index + 1}. ${line}`)].join('\n');
+  }
+
+  function findPackageByTitle(title) {
+    const wanted = clean(title);
+    return catalogPackages().find(pkg => clean(pkg.title) === wanted) || null;
+  }
+
+  function findLessonByTitle(pkg, title) {
+    const wanted = clean(title);
+    return normalLessons(pkg).find(lesson => clean(lesson.title) === wanted) || null;
+  }
+
+  function findContentByTitle(lesson, title, type = '') {
+    const wanted = clean(title);
+    const wantedType = clean(type).toUpperCase();
+    return (lesson?.contents || []).find(content => clean(content.title) === wanted && (!wantedType || clean(content.type).toUpperCase() === wantedType)) || null;
+  }
+
+  async function openOjtSyncEditor() {
+    const tpl = ojtTemplate();
+    if (!tpl) { showToast('找不到 OJT 手冊設定'); return; }
+    try {
+      await ensureAdminCatalog();
+    } catch (error) {
+      showToast(error.message || '無法載入課程管理資料');
+      return;
+    }
+    const rows = tpl.manuals.map((manual, index) => {
+      const summary = (manual.summary || []).map(line => `<li>${escapeHtml(line)}</li>`).join('');
+      return `<article class="ojt-sync-card"><div class="ojt-sync-card__head"><div><strong>${escapeHtml(manual.lessonTitle)}</strong><small>${escapeHtml(manual.materialTitle)}${manual.revision ? `｜修訂 ${escapeHtml(manual.revision)}` : ''}${manual.pages ? `｜${n(manual.pages)} 頁` : ''}</small></div><span class="tag tag--warning">必修</span></div><ol class="ojt-sync-summary">${summary}</ol><label class="field-group"><span>受保護的 PDF / Google Drive 分享連結</span><input id="ojtManualUrl_${index}" type="url" placeholder="https://drive.google.com/file/d/.../view" required></label></article>`;
+    }).join('');
+    showAdminEditor('同步 OJT 手冊', `<form id="ojtSyncForm" class="admin-form"><div class="ojt-security-note"><strong>教材安全</strong><p>這批 OJT 手冊屬內部教材，不直接放進 GitHub 靜態檔。請先將 PDF 放在公司控管的 Google Drive，再貼上分享連結；同步後仍由既有 Apps Script 後端與學習紀錄流程管理。</p></div><div class="ojt-sync-list">${rows}</div><div class="form-actions"><button class="secondary-button" type="button" data-cancel-editor>取消</button><button class="primary-button" type="submit">建立／更新 OJT 課程</button></div></form>`);
+    document.querySelectorAll('[data-cancel-editor]').forEach(button => button.onclick = closeAdminEditor);
+    $('ojtSyncForm').addEventListener('submit', syncOjtTemplate);
+  }
+
+  async function syncOjtTemplate(event) {
+    event.preventDefault();
+    const tpl = ojtTemplate();
+    if (!tpl) return;
+    const button = event.currentTarget.querySelector('button[type="submit"]');
+    const urls = tpl.manuals.map((manual, index) => clean($(`ojtManualUrl_${index}`)?.value));
+    if (urls.some(url => !/^https:\/\//i.test(url))) { showToast('請為每份手冊填入有效的 HTTPS / Google Drive 連結'); return; }
+    setButtonBusy(button, true, '同步中…');
+    try {
+      await ensureAdminCatalog(true);
+      let pkg = findPackageByTitle(tpl.title);
+      const desiredSort = pkg?.sort || (catalogPackages().length + 1);
+      if (pkg?.publishState === '已發布') await saveAdminAction('setPackageState', { id: pkg.id, publishState: '草稿' });
+      pkg = findPackageByTitle(tpl.title);
+      await saveAdminAction('savePackage', {
+        id: pkg?.id || '', title: tpl.title, description: tpl.description || '', sort: desiredSort,
+        enabled: true, publishState: '草稿', completionRule: tpl.completionRule || '所有必修子課程完成'
+      });
+      pkg = findPackageByTitle(tpl.title);
+      if (!pkg) throw new Error('OJT 課程建立失敗');
+
+      for (let index = 0; index < tpl.manuals.length; index++) {
+        const manual = tpl.manuals[index];
+        let lesson = findLessonByTitle(pkg, manual.lessonTitle);
+        await saveAdminAction('saveLesson', {
+          id: lesson?.id || '', packageId: pkg.id, title: manual.lessonTitle, sort: n(manual.sort) || index + 1,
+          required: true, enabled: true, videoPassPercent: null, submissionMode: '不需要', submissionNote: '',
+          applicabilityMode: '全部適用', applicableIds: []
+        });
+        pkg = findPackageByTitle(tpl.title);
+        lesson = findLessonByTitle(pkg, manual.lessonTitle);
+        if (!lesson) throw new Error(`建立學習項目失敗：${manual.lessonTitle}`);
+
+        const summaryTitle = '學習重點';
+        const summaryContent = findContentByTitle(lesson, summaryTitle, 'TEXT');
+        await saveAdminAction('saveContent', {
+          id: summaryContent?.id || '', lessonId: lesson.id, packageId: '', type: 'TEXT', title: summaryTitle,
+          url: '', text: summaryTextForOjt(manual), sort: 1, enabled: true
+        });
+
+        pkg = findPackageByTitle(tpl.title);
+        lesson = findLessonByTitle(pkg, manual.lessonTitle);
+        const pdfContent = findContentByTitle(lesson, manual.materialTitle, 'PDF');
+        await saveAdminAction('saveContent', {
+          id: pdfContent?.id || '', lessonId: lesson.id, packageId: '', type: 'PDF', title: manual.materialTitle,
+          url: urls[index], text: '', sort: 2, enabled: true
+        });
+      }
+
+      pkg = findPackageByTitle(tpl.title);
+      if (!pkg) throw new Error('OJT 課程同步失敗');
+      await saveAdminAction('setPackageState', { id: pkg.id, publishState: '已發布' });
+      state.manageOpenPackages.add(pkg.id);
+      saveFoldState();
+      renderAdminManage();
+      closeAdminEditor();
+      showToast('OJT 課程已建立／更新並發布，接著請使用「批次指派」選擇學員');
+    } catch (error) {
+      setButtonBusy(button, false);
+      showToast(error.message || 'OJT 手冊同步失敗');
+    }
   }
 
   function catalogPackages() { return state.adminCatalog?.packages || []; }
@@ -1670,6 +1791,7 @@
     $('completeLessonButton').onclick = completeActiveLesson;
     $('nextLessonButton').onclick = goNextLesson;
     $('newPackageButton').onclick = () => openPackageEditor(null);
+    $('syncOjtButton').onclick = openOjtSyncEditor;
     $('exportProgressButton').onclick = exportProgress;
     $('closeAdminEditorButton').onclick = closeAdminEditor;
     $('adminEditorOverlay').onclick = event => { if (event.target === $('adminEditorOverlay')) closeAdminEditor(); };
