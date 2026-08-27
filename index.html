@@ -49,7 +49,7 @@
         <section id="adminDashboard" hidden>
           <nav class="tab-bar tab-bar--admin" aria-label="教育中心功能"><button class="tab-button is-active" data-admin-tab="people" type="button">依人員查看</button><button class="tab-button" data-admin-tab="courses" type="button">依課程查看</button><button class="tab-button" data-admin-tab="manage" type="button">課程管理</button></nav>
           <section id="adminTrackingPanel" class="tab-panel"><div id="adminSummary" class="summary-grid"></div><form id="adminSearchForm" class="search-bar" onsubmit="return false;"><input id="adminSearch" type="search" placeholder="搜尋帳號、姓名、店別或課程"></form><div id="adminPeoplePanel" class="accordion-list"></div><div id="adminCoursesPanel" class="accordion-list" hidden></div></section>
-          <section id="adminManagePanel" class="tab-panel" hidden><div class="panel-heading manage-heading"><div><h2>課程管理</h2><p class="package-meta">課程可直接放教材，也可建立多個子課程</p></div><div class="manage-heading__actions"><button id="exportProgressButton" class="secondary-button primary-button--fit" type="button">匯出訓練紀錄</button><button id="newPackageButton" class="primary-button primary-button--fit" type="button">＋ 新增課程</button></div></div><div id="adminCatalogSummary" class="summary-grid"></div><div id="adminCatalogList" class="manage-list"></div></section>
+          <section id="adminManagePanel" class="tab-panel" hidden><div class="panel-heading manage-heading"><div><h2>課程管理</h2><p class="package-meta">課程可直接放教材，也可建立多個子課程</p></div><div class="manage-heading__actions"><button id="exportProgressButton" class="secondary-button primary-button--fit" type="button">匯出訓練紀錄</button><button id="syncOjtButton" class="secondary-button primary-button--fit" type="button">同步 OJT 手冊</button><button id="newPackageButton" class="primary-button primary-button--fit" type="button">＋ 新增課程</button></div></div><div id="adminCatalogSummary" class="summary-grid"></div><div id="adminCatalogList" class="manage-list"></div></section>
         </section>
       </section>
     </main>
@@ -61,6 +61,7 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script src="api_config.js?v=1.1.4"></script>
-  <script src="app.js?v=1.1.4"></script>
+  <script src="ojt_catalog.js?v=1.1.4-ojt1"></script>
+  <script src="app.js?v=1.1.4-ojt1"></script>
 </body>
 </html>
